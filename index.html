@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
+<script src="config.js"></script>
 <script src="https://cdn.maptiler.com/maptiler-sdk-js/v2/maptiler-sdk.umd.js"></script>
 <link href="https://cdn.maptiler.com/maptiler-sdk-js/v2/maptiler-sdk.css" rel="stylesheet">
 <title>WalkTracker</title>
@@ -175,7 +176,7 @@ main{flex:1;position:relative;overflow:hidden}
 <script type="module">
 import { openDB } from 'https://cdn.jsdelivr.net/npm/idb@7.1.1/+esm';
 
-const API_KEY = 'YOUR_KEY';
+const API_KEY = window.API_KEY;
 const DB_NAME = 'walktracker';
 const STORE_NAME = 'sessions';
 const STEP_RATE = 1312;
