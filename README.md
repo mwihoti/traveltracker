@@ -16,23 +16,35 @@ A Progressive Web App (PWA) walk and travel tracker powered by MapTiler. Works e
 ## Quick Start
 
 1. **Get a MapTiler API key** at https://cloud.maptiler.com
-2. Open `index.html` and replace `YOUR_KEY` with your key (line 178)
-3. Serve with any static HTTP server:
+2. Copy `.env.example` to `.env` and paste your key:
+   ```bash
+   cp .env.example .env
+   # edit .env and set MAPTILER_API_KEY=your_key
+   ```
+3. Generate `config.js` from `.env`:
+   ```bash
+   chmod +x setup.sh && ./setup.sh
+   ```
+4. Serve with any static HTTP server:
    ```bash
    npx serve .
    # or
    python3 -m http.server 8080
    ```
-4. Open in Chrome, accept location permission, start walking
+5. Open in Chrome, accept location permission, start walking
 
 ## File Structure
 
 ```
-index.html       — Full app UI and JavaScript logic
-sw.js            — Service worker for offline caching
-manifest.json    — PWA manifest for "Add to Home Screen"
-icon-192.png     — App icon (192×192)
-icon-512.png     — App icon (512×512)
+.env              — Your API key (gitignored, never committed)
+.env.example      — Template for .env
+setup.sh          — Generates config.js from .env
+config.js         — Generated, loaded by index.html (gitignored)
+index.html        — Full app UI and JavaScript logic
+sw.js             — Service worker for offline caching
+manifest.json     — PWA manifest for "Add to Home Screen"
+icon-192.png      — App icon (192×192)
+icon-512.png      — App icon (512×512)
 ```
 
 ## Tech Stack
