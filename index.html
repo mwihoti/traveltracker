@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<meta name="theme-color" content="#185FA5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<script src="https://cdn.maptiler.com/maptiler-sdk-js/v2/maptiler-sdk.umd.js"></script>
+<link href="https://cdn.maptiler.com/maptiler-sdk-js/v2/maptiler-sdk.css" rel="stylesheet">
+<title>WalkTracker</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{--primary:#185FA5;--bg:#121212;--surface:#1E1E1E;--surface2:#2A2A2A;--text:#E0E0E0;--text2:#999;--radius:12px;--shadow:0 2px 8px rgba(0,0,0,.3)}
+html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+#app{display:flex;flex-direction:column;height:100%;max-width:480px;margin:0 auto;position:relative}
+
+/* HEADER */
+header{background:var(--surface);padding:12px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #333;z-index:10;flex-shrink:0}
+header h1{font-size:18px;font-weight:700;color:#fff;letter-spacing:-.3px}
+#street-name{font-size:12px;color:var(--text2);flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* RECORD INDICATOR */
+#record-indicator{display:flex;align-items:center;gap:6px;font-size:12px;color:#ff4444;font-weight:600}
+#record-indicator.hidden{display:none}
+.pulse-dot{width:10px;height:10px;border-radius:50%;background:#ff4444;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
+
+/* MAIN CONTENT */
+main{flex:1;position:relative;overflow:hidden}
+.tab{display:none;height:100%;flex-direction:column;position:absolute;inset:0}
+.tab.active{display:flex}
+
+/* MAPS */
+.map-container{flex:1;min-height:0;width:100%}
+.map-container.small{height:280px;flex:none;border-radius:var(--radius);overflow:hidden;margin:12px}
+.maplibregl-ctrl-attrib{font-size:10px!important}
+
+/* RECORD CONTROLS */
+#record-controls{background:var(--surface);padding:16px;display:flex;flex-direction:column;align-items:center;gap:12px;border-top:1px solid #333;flex-shrink:0}
+#record-btn{width:72px;height:72px;border-radius:50%;border:4px solid var(--primary);background:var(--primary);color:#fff;font-size:14px;font-weight:700;cursor:pointer;transition:all .3s;position:relative}
+#record-btn.recording{border-color:#ff4444;background:transparent;color:#ff4444}
+#record-btn.recording::after{content:'';position:absolute;inset:14px;border-radius:4px;background:#ff4444}
+#record-btn:active{transform:scale(.95)}
+#live-stats{display:flex;gap:20px;width:100%;justify-content:center}
+#live-stats span{font-size:13px;color:var(--text2);text-align:center}
+#live-stats span strong{display:block;font-size:18px;color:var(--text);font-weight:700;margin-top:2px}
+
+/* USER LOCATION MARKER */
+.user-marker{width:16px;height:16px;border-radius:50%;background:var(--primary);border:3px solid #fff;box-shadow:0 0 0 2px var(--primary)}
+.user-marker.pulsing{animation:gps-pulse 1.5s ease-in-out infinite}
+@keyframes gps-pulse{0%{box-shadow:0 0 0 2px var(--primary),0 0 0 0 rgba(24,95,165,.4)}50%{box-shadow:0 0 0 2px var(--primary),0 0 0 8px rgba(24,95,165,.1)}100%{box-shadow:0 0 0 2px var(--primary),0 0 0 0 rgba(24,95,165,.4)}}
+
+/* START / END MARKERS */
+.start-marker{width:14px;height:14px;border-radius:50%;background:#4CAF50;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.end-marker{width:14px;height:14px;border-radius:50%;background:transparent;border:3px solid #ff4444;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+
+/* PIN MARKER */
+.pin-marker{font-size:28px;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.5);cursor:pointer}
+
+/* HISTORY TAB */
+#history-list{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+#history-list .empty-state{text-align:center;color:var(--text2);padding:40px 20px;font-size:15px}
+.session-card{background:var(--surface2);border-radius:var(--radius);padding:14px 16px;cursor:pointer;transition:background .2s}
+.session-card:active{background:#333}
+.session-name{font-size:15px;font-weight:600;color:#fff;margin-bottom:4px}
+.session-meta{font-size:12px;color:var(--text2)}
+
+/* SESSION DETAIL OVERLAY */
+#session-detail{position:absolute;inset:0;background:var(--bg);z-index:20;display:flex;flex-direction:column;overflow-y:auto}
+#session-detail.hidden{display:none}
+#session-detail .btn{background:var(--primary);color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;width:100%;margin-top:8px}
+#session-detail .btn:active{opacity:.8}
+#close-detail{background:transparent;color:var(--text2);border:none;padding:8px 16px;cursor:pointer;font-size:14px;align-self:flex-start;margin:8px}
+#elevation-chart{width:100%;padding:0 12px 12px;overflow:hidden}
+#elevation-chart svg{width:100%;height:auto;max-height:180px;display:block}
+#session-info{padding:0 16px 16px}
+#session-info h3{font-size:17px;margin-bottom:4px}
+#session-info p{font-size:12px;color:var(--text2);margin-bottom:8px}
+.session-stats{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--text)}
+
+/* EXPLORE TAB */
+#explore-controls{position:absolute;top:12px;left:12px;right:12px;z-index:5;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+#explore-controls > *{pointer-events:auto}
+#search-input{width:100%;padding:12px 14px;border-radius:var(--radius);border:2px solid transparent;background:rgba(30,30,30,.95);color:var(--text);font-size:14px;outline:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#search-input:focus{border-color:var(--primary)}
+#search-input::placeholder{color:#666}
+#autocomplete-results{background:var(--surface);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+#autocomplete-results.hidden{display:none}
+.autocomplete-item{padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #333;transition:background .15s}
+.autocomplete-item:last-child{border-bottom:none}
+.autocomplete-item:hover,.autocomplete-item:active{background:var(--surface2)}
+#layer-toggles{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:rgba(30,30,30,.9);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:8px 12px;border-radius:var(--radius)}
+#layer-toggles label{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text);cursor:pointer}
+#layer-toggles input[type="checkbox"]{accent-color:var(--primary)}
+#style-selector{background:var(--surface2);color:var(--text);border:1px solid #444;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;margin-left:auto}
+
+/* TAB BAR */
+#tab-bar{display:flex;background:var(--surface);border-top:1px solid #333;flex-shrink:0;z-index:10}
+#tab-bar button{flex:1;padding:10px;background:transparent;border:none;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;position:relative}
+#tab-bar button.active{color:var(--primary)}
+#tab-bar button.active::after{content:'';position:absolute;top:0;left:20%;right:20%;height:2px;background:var(--primary);border-radius:0 0 2px 2px}
+
+/* MISC */
+.hidden{display:none!important}
+.btn-primary{background:var(--primary);color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+@media(min-width:481px){#app{border-left:1px solid #333;border-right:1px solid #333}}
+</style>
+</head>
+<body>
+<div id="app">
+
+<header>
+  <h1>WalkTracker</h1>
+  <div id="record-indicator" class="hidden">
+    <div class="pulse-dot"></div>
+    <span>REC</span>
+  </div>
+  <div id="street-name"></div>
+</header>
+
+<main>
+  <!-- TAB: RECORD -->
+  <section id="tab-record" class="tab active">
+    <div id="record-map" class="map-container"></div>
+    <div id="record-controls">
+      <div id="live-stats">
+        <span><strong id="stat-distance">0.00</strong>km</span>
+        <span><strong id="stat-duration">00:00</strong>time</span>
+        <span><strong id="stat-elevation">--</strong>elev</span>
+      </div>
+      <button id="record-btn" aria-label="Start/Stop Walk">Start</button>
+    </div>
+  </section>
+
+  <!-- TAB: HISTORY -->
+  <section id="tab-history" class="tab">
+    <div id="history-list"></div>
+    <div id="session-detail" class="hidden">
+      <button id="close-detail">&larr; Back</button>
+      <div id="replay-map" class="map-container small"></div>
+      <div id="elevation-chart"></div>
+      <div id="session-info"></div>
+    </div>
+  </section>
+
+  <!-- TAB: EXPLORE -->
+  <section id="tab-explore" class="tab">
+    <div id="explore-map" class="map-container"></div>
+    <div id="explore-controls">
+      <input id="search-input" type="text" placeholder="Search destination..." autocomplete="off">
+      <div id="autocomplete-results" class="hidden"></div>
+      <div id="layer-toggles">
+        <label><input type="checkbox" id="toggle-buildings" checked> Buildings</label>
+        <label><input type="checkbox" id="toggle-weather"> Weather</label>
+        <select id="style-selector">
+          <option value="outdoor-v2">Outdoor</option>
+          <option value="streets-v2">Streets</option>
+          <option value="satellite-v2">Satellite</option>
+        </select>
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav id="tab-bar">
+  <button data-tab="record" class="active" aria-label="Record">Record</button>
+  <button data-tab="history" aria-label="History">History</button>
+  <button data-tab="explore" aria-label="Explore">Explore</button>
+</nav>
+
+</div>
+
+<script type="module">
+import { openDB } from 'https://cdn.jsdelivr.net/npm/idb@7.1.1/+esm';
+
+const API_KEY = 'YOUR_KEY';
+const DB_NAME = 'walktracker';
+const STORE_NAME = 'sessions';
+const STEP_RATE = 1312;
+
+let db, recordMap, exploreMap, replayMap;
+let watchId = null;
+let recording = false;
+let currentSession = null;
+let routeCoords = [];
+let startTime = null;
+let timerInterval = null;
+let userMarker = null;
+let searchMarker = null;
+
+const $ = id => document.getElementById(id);
+const streetName = $('street-name');
+const recordBtn = $('record-btn');
+const recordIndicator = $('record-indicator');
+const statDist = $('stat-distance');
+const statDur = $('stat-duration');
+const statElev = $('stat-elevation');
+const historyList = $('history-list');
+const sessionDetail = $('session-detail');
+const elevationChart = $('elevation-chart');
+const sessionInfo = $('session-info');
+const closeDetail = $('close-detail');
+const searchInput = $('search-input');
+const autoResults = $('autocomplete-results');
+const chkBuildings = $('toggle-buildings');
+const chkWeather = $('toggle-weather');
+const styleSel = $('style-selector');
+const tabBtns = document.querySelectorAll('[data-tab]');
+
+async function init() {
+  maptilersdk.config.apiKey = API_KEY;
+  db = await openDB(DB_NAME, 1, {
+    upgrade(d) {
+      if (!d.objectStoreNames.contains(STORE_NAME))
+        d.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+    }
+  });
+  initRecordMap();
+  initExploreMap();
+  loadHistory();
+  setupTabs();
+  registerSW();
+}
+
+function registerSW() {
+  if ('serviceWorker' in navigator)
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+/* ---- MAP HELPERS ---- */
+
+function addRouteLine(map, coords, color = '#185FA5', width = 4) {
+  const id = 'route-line';
+  if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource(id)) map.removeSource(id);
+  if (!coords || coords.length < 2) return;
+  map.addSource(id, {
+    type: 'geojson',
+    data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }
+  });
+  map.addLayer({
+    id, type: 'line', source: id,
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': color, 'line-width': width, 'line-opacity': 0.85 }
+  });
+}
+
+function removeRouteLine(map) {
+  const id = 'route-line';
+  if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource(id)) map.removeSource(id);
+}
+
+function removeAllMarkers(containerEl) {
+  if (!containerEl) return;
+  containerEl.querySelectorAll('.maplibregl-marker').forEach(el => {
+    if (el.parentNode) el.remove();
+  });
+}
+
+function addMarker(map, coords, className) {
+  const el = document.createElement('div');
+  el.className = className;
+  new maptilersdk.Marker({ element: el }).setLngLat(coords).addTo(map);
+  return el;
+}
+
+/* ---- MAPS ---- */
+
+function initRecordMap() {
+  recordMap = new maptilersdk.Map({
+    container: 'record-map',
+    style: maptilersdk.MapStyle.OUTDOOR,
+    center: [-73.985, 40.748],
+    zoom: 15,
+    attributionControl: false
+  });
+  recordMap.addControl(new maptilersdk.AttributionControl(), 'bottom-right');
+  recordMap.on('load', () => addBuildingsLayers(recordMap));
+}
+
+function initExploreMap() {
+  exploreMap = new maptilersdk.Map({
+    container: 'explore-map',
+    style: maptilersdk.MapStyle.OUTDOOR,
+    center: [-73.985, 40.748],
+    zoom: 12,
+    attributionControl: false
+  });
+  exploreMap.addControl(new maptilersdk.NavigationControl(), 'top-right');
+  exploreMap.addControl(new maptilersdk.AttributionControl(), 'bottom-right');
+  exploreMap.on('load', () => {
+    addBuildingsLayers(exploreMap);
+    addWeatherLayers(exploreMap);
+  });
+}
+
+function initReplayMap(center) {
+  if (replayMap) { replayMap.remove(); replayMap = null; }
+  replayMap = new maptilersdk.Map({
+    container: 'replay-map',
+    style: maptilersdk.MapStyle.OUTDOOR,
+    center: center || [-73.985, 40.748],
+    zoom: 14,
+    attributionControl: false
+  });
+  replayMap.addControl(new maptilersdk.AttributionControl(), 'bottom-right');
+}
+
+function addBuildingsLayers(map) {
+  if (map.getSource('buildings')) return;
+  map.addSource('buildings', {
+    type: 'vector',
+    url: `https://api.maptiler.com/tiles/buildings/tiles.json?key=${API_KEY}`
+  });
+  const layers = [
+    { id: 'buildings-fill', type: 'fill', paint: { 'fill-color': '#627591', 'fill-opacity': 0.25 } },
+    { id: 'buildings-outline', type: 'line', paint: { 'line-color': '#627591', 'line-width': 0.5 } }
+  ];
+  layers.forEach(l => {
+    map.addLayer({ ...l, source: 'buildings', 'source-layer': 'building' });
+  });
+}
+
+function removeBuildingsLayers(map) {
+  ['buildings-fill','buildings-outline'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+  if (map.getSource('buildings')) map.removeSource('buildings');
+}
+
+function addWeatherLayers(map) {
+  if (map.getSource('weather-precip')) return;
+  map.addSource('weather-precip', {
+    type: 'raster',
+    tiles: [`https://api.maptiler.com/weather/precipitation/{z}/{x}/{y}.png?key=${API_KEY}`],
+    tileSize: 256
+  });
+  map.addLayer({
+    id: 'weather-precip-layer', type: 'raster', source: 'weather-precip',
+    paint: { 'raster-opacity': 0.35 }
+  });
+  map.addSource('weather-clouds', {
+    type: 'raster',
+    tiles: [`https://api.maptiler.com/weather/clouds/{z}/{x}/{y}.png?key=${API_KEY}`],
+    tileSize: 256
+  });
+  map.addLayer({
+    id: 'weather-clouds-layer', type: 'raster', source: 'weather-clouds',
+    paint: { 'raster-opacity': 0.25 }
+  });
+}
+
+function removeWeatherLayers(map) {
+  ['weather-precip-layer','weather-clouds-layer'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+  ['weather-precip','weather-clouds'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
+}
+
+/* ---- GPS TRACKING ---- */
+
+function startRecording() {
+  if (!navigator.geolocation) { alert('Geolocation not available'); return; }
+  recording = true;
+  routeCoords = [];
+  startTime = Date.now();
+  currentSession = {
+    name: getSessionName(),
+    coordinates: [],
+    distance: 0, duration: 0, steps: 0,
+    startTime: startTime,
+    date: new Date().toISOString()
+  };
+  recordBtn.textContent = 'Stop';
+  recordBtn.classList.add('recording');
+  recordIndicator.classList.remove('hidden');
+  timerInterval = setInterval(updateTimer, 1000);
+  statDist.textContent = '0.00';
+  statDur.textContent = '00:00';
+  statElev.textContent = '--';
+  watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+    enableHighAccuracy: true, timeout: 10000, maximumAge: 5000
+  });
+}
+
+function stopRecording() {
+  recording = false;
+  recordBtn.textContent = 'Start';
+  recordBtn.classList.remove('recording');
+  recordIndicator.classList.add('hidden');
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  clearInterval(timerInterval);
+  if (routeCoords.length > 1) finalizeSession();
+  else routeCoords = [];
+}
+
+function onPosition(pos) {
+  const { latitude: lat, longitude: lng } = pos.coords;
+  const coords = [lng, lat];
+  updateUserLocation(recordMap, coords);
+  if (recording) {
+    routeCoords.push(coords);
+    addRouteLine(recordMap, routeCoords);
+    recordMap.flyTo({ center: coords, zoom: 16, duration: 800 });
+    const dist = calcDistance(routeCoords);
+    const dur = (Date.now() - startTime) / 1000;
+    currentSession.distance = dist;
+    currentSession.duration = dur;
+    currentSession.steps = Math.round(dist * STEP_RATE);
+    statDist.textContent = dist.toFixed(2);
+    fetchElevation(lat, lng).then(e => { if (e !== null) statElev.textContent = e.toFixed(0); });
+    reverseGeocode(coords);
+  } else {
+    reverseGeocode(coords);
+  }
+}
+
+function onError(err) { console.warn('GPS:', err.message); }
+
+function updateUserLocation(map, coords) {
+  if (userMarker) userMarker.remove();
+  const el = document.createElement('div');
+  el.className = 'user-marker' + (recording ? ' pulsing' : '');
+  userMarker = new maptilersdk.Marker({ element: el }).setLngLat(coords).addTo(map);
+}
+
+function updateTimer() {
+  if (!startTime) return;
+  const dur = (Date.now() - startTime) / 1000;
+  statDur.textContent = fmtDuration(dur);
+}
+
+/* ---- SESSION MANAGEMENT ---- */
+
+function finalizeSession() {
+  currentSession.coordinates = routeCoords.slice();
+  currentSession.distance = calcDistance(routeCoords);
+  currentSession.duration = (Date.now() - startTime) / 1000;
+  currentSession.steps = Math.round(currentSession.distance * STEP_RATE);
+  saveSession(currentSession);
+  currentSession = null;
+}
+
+async function saveSession(s) {
+  await db.add(STORE_NAME, s);
+  loadHistory();
+}
+
+async function loadHistory() {
+  const sessions = await db.getAll(STORE_NAME);
+  sessions.reverse();
+  if (!sessions.length) {
+    historyList.innerHTML = '<div class="empty-state">No walks yet. Hit Record and start moving!</div>';
+    return;
+  }
+  historyList.innerHTML = sessions.map(s => `
+    <div class="session-card" data-id="${s.id}">
+      <div class="session-name">${escHtml(s.name)}</div>
+      <div class="session-meta">${new Date(s.date).toLocaleDateString()} · ${s.distance.toFixed(2)} km · ${fmtDuration(s.duration)}</div>
+    </div>
+  `).join('');
+  historyList.querySelectorAll('.session-card').forEach(c => {
+    c.addEventListener('click', () => showSession(+c.dataset.id));
+  });
+}
+
+async function showSession(id) {
+  const s = await db.get(STORE_NAME, id);
+  if (!s) return;
+  sessionDetail.classList.remove('hidden');
+  const center = s.coordinates?.[0] || [-73.985, 40.748];
+  initReplayMap(center);
+  setTimeout(() => {
+    drawReplayRoute(s);
+    showElevation(s);
+    sessionInfo.innerHTML = `
+      <h3>${escHtml(s.name)}</h3>
+      <p>${new Date(s.date).toLocaleString()}</p>
+      <div class="session-stats">
+        <span>📏 ${s.distance.toFixed(2)} km</span>
+        <span>⏱ ${fmtDuration(s.duration)}</span>
+        <span>👣 ${s.steps.toLocaleString()} steps</span>
+      </div>
+      <button class="btn" id="share-btn">Share as Image</button>
+    `;
+    $('share-btn')?.addEventListener('click', () => shareSession(s));
+  }, 400);
+}
+
+function drawReplayRoute(s) {
+  removeRouteLine(replayMap);
+  removeAllMarkers(document.getElementById('replay-map'));
+  const coords = s.coordinates;
+  if (!coords || coords.length < 2) return;
+  addRouteLine(replayMap, coords);
+  addMarker(replayMap, coords[0], 'start-marker');
+  addMarker(replayMap, coords[coords.length - 1], 'end-marker');
+  try {
+    const bounds = coords.reduce((b, c) => b.extend(c), new maptilersdk.LngLatBounds(coords[0], coords[0]));
+    replayMap.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+  } catch {}
+}
+
+async function showElevation(s) {
+  elevationChart.innerHTML = '<p style="padding:12px;color:#666;font-size:13px">Loading elevation...</p>';
+  const sampled = sampleCoords(s.coordinates, 80);
+  try {
+    const resp = await fetch(`https://api.maptiler.com/elevation/lines?key=${API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linestring: { type: 'LineString', coordinates: sampled } })
+    });
+    if (!resp.ok) throw new Error();
+    const data = await resp.json();
+    const elevs = data.elevations || (Array.isArray(data) ? data.map(d => d.elevation) : []);
+    if (elevs.length < 2) throw new Error();
+    renderChart(elevs, s.distance);
+  } catch {
+    const elevs = [];
+    for (const [lng, lat] of sampled) {
+      try {
+        const r = await fetch(`https://api.maptiler.com/elevation/point?lat=${lat}&lng=${lng}&key=${API_KEY}`);
+        const d = await r.json();
+        elevs.push(d.elevation != null ? d.elevation : 0);
+      } catch { elevs.push(0); }
+    }
+    if (elevs.length >= 2) renderChart(elevs, s.distance);
+    else elevationChart.innerHTML = '<p style="padding:12px;color:#666;font-size:13px">Elevation data unavailable</p>';
+  }
+}
+
+function renderChart(elevs, distKm) {
+  const w = 600, h = 200, p = { top: 20, right: 16, bottom: 28, left: 44 };
+  const cw = w - p.left - p.right, ch = h - p.top - p.bottom;
+  const mn = Math.min(...elevs), mx = Math.max(...elevs), rng = mx - mn || 1;
+  const pts = elevs.map((e, i) => {
+    const x = p.left + (i / (elevs.length - 1)) * cw;
+    const y = p.top + ch - ((e - mn) / rng) * ch;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const base = `${p.left},${p.top + ch} ${pts} ${p.left + cw},${p.top + ch}`;
+  elevationChart.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto">
+      <defs>
+        <linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#185FA5" stop-opacity=".35"/>
+          <stop offset="100%" stop-color="#185FA5" stop-opacity=".05"/>
+        </linearGradient>
+      </defs>
+      <polygon points="${base}" fill="url(#eg)"/>
+      <polyline points="${pts}" fill="none" stroke="#185FA5" stroke-width="2" stroke-linejoin="round"/>
+      <text x="${p.left}" y="${p.top - 6}" fill="#888" font-size="10">${mx.toFixed(0)}m</text>
+      <text x="${p.left}" y="${p.top + ch + 16}" fill="#888" font-size="10">0</text>
+      <text x="${p.left + cw}" y="${p.top + ch + 16}" fill="#888" font-size="10" text-anchor="end">${distKm.toFixed(1)}km</text>
+      <text x="${p.left - 4}" y="${p.top + ch + 4}" fill="#888" font-size="10" text-anchor="end">${mn.toFixed(0)}m</text>
+    </svg>`;
+}
+
+function shareSession(s) {
+  if (!s.coordinates?.length) return;
+  const simple = simplifyCoords(s.coordinates, 30);
+  const path = simple.map(c => `${c[0]},${c[1]}`).join('|');
+  const encPath = path.replace(/\|/g, '%7C');
+  const url = `https://api.maptiler.com/maps/outdoor-v2/static/auto/color:0x185FA5,weight:3|${encPath}/800x600.png?key=${API_KEY}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `walk-${s.name.replace(/\s+/g,'-')}.png`;
+  a.target = '_blank';
+  a.click();
+}
+
+/* ---- GEOCODING ---- */
+
+async function reverseGeocode(coords) {
+  try {
+    const r = await fetch(`https://api.maptiler.com/geocoding/${coords[0]},${coords[1]}.json?key=${API_KEY}&language=en&limit=1`);
+    const d = await r.json();
+    if (d.features?.length) {
+      const parts = d.features[0].place_name.split(',');
+      streetName.textContent = parts.slice(0, 2).join(',').trim();
+    }
+  } catch {}
+}
+
+async function forwardGeocode(q) {
+  if (!q || q.length < 2) return [];
+  try {
+    const r = await fetch(`https://api.maptiler.com/geocoding/${encodeURIComponent(q)}.json?key=${API_KEY}&language=en&limit=5`);
+    const d = await r.json();
+    return d.features || [];
+  } catch { return []; }
+}
+
+let geoTimeout = null;
+searchInput.addEventListener('input', () => {
+  clearTimeout(geoTimeout);
+  const q = searchInput.value.trim();
+  if (q.length < 2) { autoResults.classList.add('hidden'); return; }
+  geoTimeout = setTimeout(async () => {
+    const results = await forwardGeocode(q);
+    if (!results.length) { autoResults.classList.add('hidden'); return; }
+    autoResults.innerHTML = results.map(r => `
+      <div class="autocomplete-item" data-lng="${r.center[0]}" data-lat="${r.center[1]}" data-name="${escHtml(r.place_name)}">
+        ${escHtml(r.place_name)}
+      </div>
+    `).join('');
+    autoResults.classList.remove('hidden');
+    autoResults.querySelectorAll('.autocomplete-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const lng = +el.dataset.lng, lat = +el.dataset.lat;
+        searchInput.value = el.dataset.name;
+        autoResults.classList.add('hidden');
+        placePin([lng, lat], el.dataset.name);
+      });
+    });
+  }, 250);
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#explore-controls')) autoResults.classList.add('hidden');
+});
+
+function placePin(coords, name) {
+  if (searchMarker) searchMarker.remove();
+  const el = document.createElement('div');
+  el.className = 'pin-marker';
+  el.textContent = '\uD83D\uDCCD';
+  searchMarker = new maptilersdk.Marker({ element: el })
+    .setLngLat(coords)
+    .setPopup(new maptilersdk.Popup().setText(name))
+    .addTo(exploreMap);
+  exploreMap.flyTo({ center: coords, zoom: 15 });
+}
+
+/* ---- BUILDINGS / WEATHER / STYLE TOGGLES ---- */
+
+chkBuildings.addEventListener('change', () => {
+  chkBuildings.checked ? addBuildingsLayers(exploreMap) : removeBuildingsLayers(exploreMap);
+});
+
+chkWeather.addEventListener('change', () => {
+  chkWeather.checked ? addWeatherLayers(exploreMap) : removeWeatherLayers(exploreMap);
+});
+
+styleSel.addEventListener('change', () => {
+  const m = { 'outdoor-v2': maptilersdk.MapStyle.OUTDOOR, 'streets-v2': maptilersdk.MapStyle.STREETS, 'satellite-v2': maptilersdk.MapStyle.SATELLITE };
+  exploreMap.setStyle(m[styleSel.value] || styleSel.value);
+  exploreMap.once('style.load', () => {
+    if (chkBuildings.checked) addBuildingsLayers(exploreMap);
+    if (chkWeather.checked) addWeatherLayers(exploreMap);
+  });
+});
+
+/* ---- TABS ---- */
+
+function setupTabs() {
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+  closeDetail.addEventListener('click', () => {
+    sessionDetail.classList.add('hidden');
+    if (replayMap) { replayMap.remove(); replayMap = null; }
+  });
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  tabBtns.forEach(b => b.classList.remove('active'));
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+  setTimeout(() => {
+    if (tab === 'record' && recordMap) recordMap.resize();
+    if (tab === 'explore' && exploreMap) exploreMap.resize();
+  }, 300);
+}
+
+/* ---- RECORD BTN ---- */
+
+recordBtn.addEventListener('click', () => {
+  recording ? stopRecording() : startRecording();
+});
+
+/* ---- UTILITIES ---- */
+
+function calcDistance(coords) {
+  if (!coords?.length || coords.length < 2) return 0;
+  let d = 0;
+  for (let i = 1; i < coords.length; i++) d += haversine(coords[i-1], coords[i]);
+  return d;
+}
+
+function haversine(a, b) {
+  const [l1, a1] = a.map(c => c * Math.PI / 180);
+  const [l2, a2] = b.map(c => c * Math.PI / 180);
+  const dlat = a2 - a1, dlng = l2 - l1;
+  const sdlat = Math.sin(dlat/2), sdlng = Math.sin(dlng/2);
+  const x = sdlat*sdlat + Math.cos(a1)*Math.cos(a2)*sdlng*sdlng;
+  return 6371 * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+
+function fmtDuration(s) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+function getSessionName() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Morning Walk';
+  if (h < 17) return 'Afternoon Walk';
+  if (h < 21) return 'Evening Walk';
+  return 'Night Walk';
+}
+
+function sampleCoords(coords, n) {
+  if (!coords?.length || coords.length <= n) return coords || [];
+  const step = coords.length / n;
+  return Array.from({ length: n }, (_, i) => coords[Math.min(Math.floor(i * step), coords.length - 1)]);
+}
+
+function simplifyCoords(coords, n) {
+  if (!coords?.length || coords.length <= n) return coords || [];
+  const step = coords.length / n;
+  return Array.from({ length: n }, (_, i) => coords[Math.min(Math.floor(i * step), coords.length - 1)]);
+}
+
+async function fetchElevation(lat, lng) {
+  try {
+    const r = await fetch(`https://api.maptiler.com/elevation/point?lat=${lat}&lng=${lng}&key=${API_KEY}`);
+    const d = await r.json();
+    return d.elevation ?? null;
+  } catch { return null; }
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+init();
+</script>
+</body>
+</html>
