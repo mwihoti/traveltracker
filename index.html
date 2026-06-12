@@ -244,6 +244,8 @@ let destMarker = null;
 let liveView = false;
 let lastLiveCoord = null;
 let hotspotMarkers = [];
+let suggestedRoute = null;
+let lastRouteFetch = { time: 0, origin: null };
 
 const $ = id => document.getElementById(id);
 const streetName = $('street-name');
@@ -628,6 +630,8 @@ function onPosition(pos) {
 
 function setDestination(coords, name) {
   destination = coords;
+  suggestedRoute = null;
+  lastRouteFetch = { time: 0, origin: null };
   if (destMarker) destMarker.remove();
   const el = document.createElement('div');
   el.className = 'dest-marker';
@@ -644,8 +648,10 @@ function setDestination(coords, name) {
 
 function clearDestination() {
   destination = null;
+  suggestedRoute = null;
   if (destMarker) { destMarker.remove(); destMarker = null; }
   removeGuideLine();
+  removeSuggestedRoute();
   destClear.classList.add('hidden');
   destInput.value = '';
   destInfo.classList.add('hidden');
@@ -664,19 +670,81 @@ function fitToDestination() {
   }
 }
 
-// Redraw the dashed guide line and the remaining-distance readout.
+// Update the guide toward the destination: a TomTom shortest walking route
+// when available, otherwise the straight dashed line. Re-routes at most
+// every 45 s and only after moving ~50 m, to stay inside the free quota.
 function updateDestination() {
   if (!destination || !currentPosition) return;
   if (destInfo.classList.contains('arrived')) return;
-  drawGuideLine(currentPosition, destination);
+  if (window.TOMTOM_KEY) {
+    const now = Date.now();
+    const moved = !lastRouteFetch.origin || haversine(lastRouteFetch.origin, currentPosition) > 0.05;
+    const due = suggestedRoute
+      ? (now - lastRouteFetch.time > 45000 && moved)
+      : now - lastRouteFetch.time > 15000 || lastRouteFetch.time === 0;
+    if (due) suggestRoute();
+  }
   const km = haversine(currentPosition, destination);
-  const txt = km < 1 ? `${Math.round(km * 1000)} m to destination` : `${km.toFixed(2)} km to destination`;
-  destInfo.textContent = '🏁 ' + txt;
+  const left = km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(2)} km`;
+  destInfo.textContent = suggestedRoute
+    ? `🏁 ${left} left · route ${fmtRouteDist(suggestedRoute.meters)} · ~${Math.max(1, Math.round(suggestedRoute.seconds / 60))} min walk`
+    : `🏁 ${left} to destination`;
   destInfo.classList.remove('hidden');
+  if (!suggestedRoute) drawGuideLine(currentPosition, destination);
+}
+
+function fmtRouteDist(meters) {
+  return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(2)} km`;
+}
+
+async function suggestRoute() {
+  lastRouteFetch = { time: Date.now(), origin: currentPosition };
+  const route = await fetchRoute(currentPosition, destination);
+  if (!route || !destination) return;
+  suggestedRoute = route;
+  removeGuideLine();
+  drawSuggestedRoute(route.coords);
+  updateDestination();
+}
+
+async function fetchRoute(from, to) {
+  if (!window.TOMTOM_KEY || !from || !to) return null;
+  try {
+    const r = await fetch(`https://api.tomtom.com/routing/1/calculateRoute/${from[1]},${from[0]}:${to[1]},${to[0]}/json?key=${window.TOMTOM_KEY}&travelMode=pedestrian&routeType=shortest`);
+    if (!r.ok) return null;
+    const route = (await r.json()).routes?.[0];
+    if (!route) return null;
+    return {
+      coords: route.legs.flatMap(l => l.points.map(p => [p.longitude, p.latitude])),
+      meters: route.summary.lengthInMeters,
+      seconds: route.summary.travelTimeInSeconds
+    };
+  } catch { return null; }
+}
+
+function drawSuggestedRoute(coords) {
+  const id = 'suggested-route';
+  const data = { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } };
+  if (!recordMap || !recordMap.isStyleLoaded()) return;
+  if (recordMap.getSource(id)) { recordMap.getSource(id).setData(data); return; }
+  recordMap.addSource(id, { type: 'geojson', data });
+  recordMap.addLayer({
+    id, type: 'line', source: id,
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#4CAF50', 'line-width': 4, 'line-opacity': 0.75 }
+  });
+}
+
+function removeSuggestedRoute() {
+  if (!recordMap) return;
+  const id = 'suggested-route';
+  if (recordMap.getLayer(id)) recordMap.removeLayer(id);
+  if (recordMap.getSource(id)) recordMap.removeSource(id);
 }
 
 function arriveAtDestination() {
   removeGuideLine();
+  removeSuggestedRoute();
   destInfo.textContent = '🎉 You’ve arrived at your destination!';
   destInfo.classList.remove('hidden');
   destInfo.classList.add('arrived');
@@ -779,14 +847,39 @@ function updateTimer() {
 
 /* ---- SESSION MANAGEMENT ---- */
 
-function finalizeSession() {
-  currentSession.coordinates = routeCoords.slice();
-  currentSession.distance = calcDistance(routeCoords);
-  currentSession.duration = (Date.now() - startTime) / 1000;
-  currentSession.steps = Math.round(currentSession.distance * STEP_RATE);
-  currentSession.mode = detectMode(routeCoords, routeTimes, currentSession.duration);
-  saveSession(currentSession);
+async function finalizeSession() {
+  const s = currentSession;
   currentSession = null;
+  s.coordinates = routeCoords.slice();
+  s.distance = calcDistance(routeCoords);
+  s.duration = (Date.now() - startTime) / 1000;
+  s.steps = Math.round(s.distance * STEP_RATE);
+  s.mode = detectMode(routeCoords, routeTimes, s.duration);
+  // Snap road-based trips to the road network to clean up GPS jitter.
+  // Walks/runs keep raw GPS — paths and parks aren't in the road network.
+  if (s.mode === 'bike' || s.mode === 'vehicle') {
+    const snapped = await snapToRoads(s.coordinates);
+    if (snapped) { s.coordinates = snapped; s.snapped = true; }
+  }
+  saveSession(s);
+}
+
+async function snapToRoads(coords) {
+  if (!window.TOMTOM_KEY || !coords || coords.length < 2) return null;
+  const pts = sampleCoords(coords, 100); // API limit: 100 points
+  try {
+    const r = await fetch(`https://api.tomtom.com/snapToRoads/1/snap?points=${pts.map(c => `${c[0]},${c[1]}`).join(';')}&key=${window.TOMTOM_KEY}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const out = [];
+    for (const seg of d.route || []) {
+      for (const c of seg.geometry?.coordinates || []) {
+        const last = out[out.length - 1];
+        if (!last || last[0] !== c[0] || last[1] !== c[1]) out.push(c);
+      }
+    }
+    return out.length >= 2 ? out : null;
+  } catch { return null; }
 }
 
 // Guess travel mode from the 85th-percentile moving speed (ignores stops/jitter).
@@ -862,6 +955,7 @@ async function showSession(id) {
         <span>⏱ ${fmtDuration(s.duration)}</span>
         <span>👣 ${s.steps.toLocaleString()} steps</span>
         ${MODE_INFO[s.mode] ? `<span>${MODE_INFO[s.mode].icon} ${MODE_INFO[s.mode].label}</span>` : ''}
+        ${s.snapped ? '<span>🛣 road-snapped</span>' : ''}
       </div>
       <button class="btn" id="share-btn">Share as Image</button>
     `;
