@@ -270,6 +270,9 @@ let lastRouteFetch = { time: 0, origin: null };
 let shareTopic = null;
 let shareTimer = null;
 let shareWatchId = null;
+let wakeLock = null;
+
+const GEO_OPTS = { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 };
 
 const $ = id => document.getElementById(id);
 const streetName = $('street-name');
@@ -322,7 +325,86 @@ async function init() {
   if (!initWatchMode()) {
     smartLocate();
     restoreDestination();
+    resumeActive();
+    resumeShare();
   }
+}
+
+/* ---- PERSISTENT RECORDING (survives reload / tab kill / app switch) ---- */
+
+function persistActive() {
+  if (!recording) return;
+  try {
+    localStorage.setItem('wt-active', JSON.stringify({
+      session: currentSession, coords: routeCoords, times: routeTimes, startTime
+    }));
+  } catch {}
+}
+
+function clearActive() { localStorage.removeItem('wt-active'); }
+
+function resumeActive() {
+  const saved = localStorage.getItem('wt-active');
+  if (!saved) return;
+  try {
+    const a = JSON.parse(saved);
+    if (!a.session || !a.startTime) { clearActive(); return; }
+    currentSession = a.session;
+    routeCoords = a.coords || [];
+    routeTimes = a.times || [];
+    startTime = a.startTime;
+    recording = true;
+    recordBtn.textContent = 'Stop';
+    recordBtn.classList.add('recording');
+    recordIndicator.classList.remove('hidden');
+    statDist.textContent = (currentSession.distance || 0).toFixed(2);
+    timerInterval = setInterval(updateTimer, 1000);
+    updateTimer();
+    requestWakeLock();
+    watchId = navigator.geolocation.watchPosition(onPosition, onError, GEO_OPTS);
+    const drawSaved = () => { if (routeCoords.length > 1) addRouteLine(recordMap, routeCoords); };
+    recordMap.isStyleLoaded() ? drawSaved() : recordMap.on('load', drawSaved);
+    streetName.textContent = '▶ Walk resumed';
+  } catch { clearActive(); }
+}
+
+// Keep the screen awake while recording — screen-off suspends GPS in browsers.
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+}
+
+function releaseWakeLock() {
+  try { wakeLock?.release(); } catch {}
+  wakeLock = null;
+}
+
+function restartWatch() {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(onPosition, onError, GEO_OPTS);
+}
+
+// Coming back from another tab/app: the browser may have suspended the GPS
+// watch and released the wake lock — re-arm both.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') { persistActive(); return; }
+  if (recording) { requestWakeLock(); restartWatch(); }
+  if (shareTopic && watchId === null && shareWatchId === null) {
+    shareWatchId = navigator.geolocation.watchPosition(onPosition, onError, GEO_OPTS);
+  }
+});
+
+window.addEventListener('pagehide', persistActive);
+
+function resumeShare() {
+  const t = localStorage.getItem('wt-share');
+  if (!t || !/^wt-[0-9a-f]{16}$/.test(t)) return;
+  shareTopic = t;
+  shareBtn.textContent = '📡 Sharing';
+  shareBtn.classList.add('on');
+  if (watchId === null && shareWatchId === null) {
+    shareWatchId = navigator.geolocation.watchPosition(onPosition, onError, GEO_OPTS);
+  }
+  shareTimer = setInterval(publishPosition, 12000);
 }
 
 /* ---- PLACE DETAILS ON MAP TAP ---- */
@@ -380,11 +462,10 @@ async function startSharing() {
   const url = `${location.origin}${location.pathname}?watch=${shareTopic}`;
   shareBtn.textContent = '📡 Sharing';
   shareBtn.classList.add('on');
+  try { localStorage.setItem('wt-share', shareTopic); } catch {}
   // GPS updates also flow while not recording, so the watcher tracks you either way
   if (watchId === null && shareWatchId === null) {
-    shareWatchId = navigator.geolocation.watchPosition(onPosition, onError, {
-      enableHighAccuracy: true, timeout: 10000, maximumAge: 5000
-    });
+    shareWatchId = navigator.geolocation.watchPosition(onPosition, onError, GEO_OPTS);
   }
   shareTimer = setInterval(publishPosition, 12000);
   publishPosition();
@@ -401,6 +482,7 @@ function stopSharing() {
   clearInterval(shareTimer); shareTimer = null;
   if (shareWatchId !== null) { navigator.geolocation.clearWatch(shareWatchId); shareWatchId = null; }
   fetch(`/api/share?topic=${shareTopic}`, { method: 'DELETE' }).catch(() => {});
+  localStorage.removeItem('wt-share');
   shareTopic = null;
   shareBtn.textContent = '📡 Share';
   shareBtn.classList.remove('on');
@@ -792,9 +874,9 @@ function startRecording() {
   // start a fresh trip toward the destination (clear any prior "arrived" state)
   destInfo.classList.remove('arrived');
   updateDestination();
-  watchId = navigator.geolocation.watchPosition(onPosition, onError, {
-    enableHighAccuracy: true, timeout: 10000, maximumAge: 5000
-  });
+  requestWakeLock();
+  persistActive();
+  watchId = navigator.geolocation.watchPosition(onPosition, onError, GEO_OPTS);
 }
 
 function stopRecording() {
@@ -804,6 +886,8 @@ function stopRecording() {
   recordIndicator.classList.add('hidden');
   if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   clearInterval(timerInterval);
+  releaseWakeLock();
+  clearActive();
   if (routeCoords.length > 1) finalizeSession();
   else routeCoords = [];
 }
@@ -826,6 +910,7 @@ function onPosition(pos) {
     currentSession.duration = dur;
     currentSession.steps = Math.round(dist * STEP_RATE);
     statDist.textContent = dist.toFixed(2);
+    persistActive();
     fetchElevation(lat, lng).then(e => { if (e !== null) statElev.textContent = e.toFixed(0); });
     reverseGeocode(coords);
     if (destination && haversine(coords, destination) <= ARRIVAL_RADIUS_KM) arriveAtDestination();
