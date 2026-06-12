@@ -289,6 +289,44 @@ async function init() {
   loadHistory();
   setupTabs();
   registerSW();
+  smartLocate();
+  restoreDestination();
+}
+
+/* ---- SMART START LOCATION ---- */
+
+// Open the map where the user actually is: last known GPS position if we
+// have one, otherwise approximate IP location (no permission prompt).
+async function smartLocate() {
+  const saved = localStorage.getItem('wt-lastpos');
+  if (saved) {
+    try { jumpMaps(JSON.parse(saved), 14); return; } catch {}
+  }
+  try {
+    const r = await fetch(`https://api.maptiler.com/geolocation/ip.json?key=${API_KEY}`);
+    const d = await r.json();
+    if (d.longitude != null) jumpMaps([d.longitude, d.latitude], 11);
+  } catch {}
+}
+
+function jumpMaps(center, zoom) {
+  recordMap.jumpTo({ center, zoom });
+  exploreMap.jumpTo({ center, zoom });
+}
+
+function rememberPosition(coords) {
+  try { localStorage.setItem('wt-lastpos', JSON.stringify(coords)); } catch {}
+}
+
+/* ---- DESTINATION LOCK (persists across reloads) ---- */
+
+function restoreDestination() {
+  const saved = localStorage.getItem('wt-dest');
+  if (!saved) return;
+  try {
+    const d = JSON.parse(saved);
+    if (Array.isArray(d.coords)) setDestination(d.coords, d.name);
+  } catch {}
 }
 
 function registerSW() {
@@ -605,6 +643,7 @@ function onPosition(pos) {
   const { latitude: lat, longitude: lng } = pos.coords;
   const coords = [lng, lat];
   currentPosition = coords;
+  rememberPosition(coords);
   updateUserLocation(recordMap, coords);
   updateDestination();
   if (recording) {
@@ -632,6 +671,7 @@ function setDestination(coords, name) {
   destination = coords;
   suggestedRoute = null;
   lastRouteFetch = { time: 0, origin: null };
+  try { localStorage.setItem('wt-dest', JSON.stringify({ coords, name })); } catch {}
   if (destMarker) destMarker.remove();
   const el = document.createElement('div');
   el.className = 'dest-marker';
@@ -649,6 +689,7 @@ function setDestination(coords, name) {
 function clearDestination() {
   destination = null;
   suggestedRoute = null;
+  localStorage.removeItem('wt-dest');
   if (destMarker) { destMarker.remove(); destMarker = null; }
   removeGuideLine();
   removeSuggestedRoute();
@@ -818,6 +859,7 @@ function locateUser() {
       const { latitude: lat, longitude: lng } = pos.coords;
       const coords = [lng, lat];
       currentPosition = coords;
+      rememberPosition(coords);
       updateUserLocation(recordMap, coords);
       recordMap.flyTo({ center: coords, zoom: 16, duration: 1000 });
       reverseGeocode(coords);
