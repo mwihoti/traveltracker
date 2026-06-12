@@ -51,6 +51,17 @@ main{flex:1;position:relative;overflow:hidden}
 #live-stats{display:flex;gap:20px;width:100%;justify-content:center}
 #live-stats span{font-size:13px;color:var(--text2);text-align:center}
 #live-stats span strong{display:block;font-size:18px;color:var(--text);font-weight:700;margin-top:2px}
+#dest-row{width:100%;position:relative}
+#dest-input{width:100%;padding:10px 34px 10px 14px;border-radius:var(--radius);border:2px solid transparent;background:var(--surface2);color:var(--text);font-size:13px;outline:none}
+#dest-input:focus{border-color:var(--primary)}
+#dest-input::placeholder{color:#666}
+#dest-clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:var(--text2);font-size:20px;line-height:1;cursor:pointer;padding:4px 8px}
+#dest-clear.hidden{display:none}
+#dest-results{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:6;background:var(--surface);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+#dest-results.hidden{display:none}
+#dest-info{width:100%;text-align:center;font-size:12px;font-weight:600;color:var(--primary)}
+#dest-info.hidden{display:none}
+#dest-info.arrived{color:#4CAF50}
 
 /* USER LOCATION MARKER */
 .user-marker{width:16px;height:16px;border-radius:50%;background:var(--primary);border:3px solid #fff;box-shadow:0 0 0 2px var(--primary)}
@@ -60,6 +71,7 @@ main{flex:1;position:relative;overflow:hidden}
 /* START / END MARKERS */
 .start-marker{width:14px;height:14px;border-radius:50%;background:#4CAF50;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)}
 .end-marker{width:14px;height:14px;border-radius:50%;background:transparent;border:3px solid #ff4444;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.dest-marker{font-size:26px;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.5);cursor:pointer}
 
 /* PIN MARKER */
 .pin-marker{font-size:28px;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.5);cursor:pointer}
@@ -130,6 +142,12 @@ main{flex:1;position:relative;overflow:hidden}
   <section id="tab-record" class="tab active">
     <div id="record-map" class="map-container"></div>
     <div id="record-controls">
+      <div id="dest-row">
+        <input id="dest-input" type="text" placeholder="🏁 Set destination (optional)…" autocomplete="off">
+        <button id="dest-clear" class="hidden" aria-label="Clear destination">&times;</button>
+        <div id="dest-results" class="hidden"></div>
+      </div>
+      <div id="dest-info" class="hidden"></div>
       <div id="live-stats">
         <span><strong id="stat-distance">0.00</strong>km</span>
         <span><strong id="stat-duration">00:00</strong>time</span>
@@ -187,6 +205,7 @@ const API_KEY = window.API_KEY;
 const DB_NAME = 'walktracker';
 const STORE_NAME = 'sessions';
 const STEP_RATE = 1312;
+const ARRIVAL_RADIUS_KM = 0.04; // ~40 m — counts as "arrived"
 
 let db, recordMap, exploreMap, replayMap;
 let watchId = null;
@@ -198,6 +217,8 @@ let startTime = null;
 let timerInterval = null;
 let userMarker = null;
 let searchMarker = null;
+let destination = null;
+let destMarker = null;
 
 const $ = id => document.getElementById(id);
 const streetName = $('street-name');
@@ -214,6 +235,10 @@ const sessionInfo = $('session-info');
 const closeDetail = $('close-detail');
 const searchInput = $('search-input');
 const autoResults = $('autocomplete-results');
+const destInput = $('dest-input');
+const destClear = $('dest-clear');
+const destResults = $('dest-results');
+const destInfo = $('dest-info');
 const chkBuildings = $('toggle-buildings');
 const chkWeather = $('toggle-weather');
 const styleSel = $('style-selector');
@@ -396,6 +421,9 @@ function startRecording() {
   statDist.textContent = '0.00';
   statDur.textContent = '00:00';
   statElev.textContent = '--';
+  // start a fresh trip toward the destination (clear any prior "arrived" state)
+  destInfo.classList.remove('arrived');
+  updateDestination();
   watchId = navigator.geolocation.watchPosition(onPosition, onError, {
     enableHighAccuracy: true, timeout: 10000, maximumAge: 5000
   });
@@ -415,7 +443,9 @@ function stopRecording() {
 function onPosition(pos) {
   const { latitude: lat, longitude: lng } = pos.coords;
   const coords = [lng, lat];
+  currentPosition = coords;
   updateUserLocation(recordMap, coords);
+  updateDestination();
   if (recording) {
     routeCoords.push(coords);
     addRouteLine(recordMap, routeCoords);
@@ -428,9 +458,89 @@ function onPosition(pos) {
     statDist.textContent = dist.toFixed(2);
     fetchElevation(lat, lng).then(e => { if (e !== null) statElev.textContent = e.toFixed(0); });
     reverseGeocode(coords);
+    if (destination && haversine(coords, destination) <= ARRIVAL_RADIUS_KM) arriveAtDestination();
   } else {
     reverseGeocode(coords);
   }
+}
+
+/* ---- DESTINATION ---- */
+
+function setDestination(coords, name) {
+  destination = coords;
+  if (destMarker) destMarker.remove();
+  const el = document.createElement('div');
+  el.className = 'dest-marker';
+  el.textContent = '🏁'; // 🏁 checkered flag
+  destMarker = new maptilersdk.Marker({ element: el })
+    .setLngLat(coords)
+    .setPopup(new maptilersdk.Popup().setText(name || 'Destination'))
+    .addTo(recordMap);
+  destClear.classList.remove('hidden');
+  destInput.value = name || '';
+  fitToDestination();
+  updateDestination();
+}
+
+function clearDestination() {
+  destination = null;
+  if (destMarker) { destMarker.remove(); destMarker = null; }
+  removeGuideLine();
+  destClear.classList.add('hidden');
+  destInput.value = '';
+  destInfo.classList.add('hidden');
+  destInfo.classList.remove('arrived');
+}
+
+function fitToDestination() {
+  if (!destination) return;
+  if (currentPosition) {
+    try {
+      const b = new maptilersdk.LngLatBounds(currentPosition, currentPosition).extend(destination);
+      recordMap.fitBounds(b, { padding: 80, maxZoom: 16, duration: 800 });
+    } catch { recordMap.flyTo({ center: destination, zoom: 14 }); }
+  } else {
+    recordMap.flyTo({ center: destination, zoom: 14, duration: 800 });
+  }
+}
+
+// Redraw the dashed guide line and the remaining-distance readout.
+function updateDestination() {
+  if (!destination || !currentPosition) return;
+  if (destInfo.classList.contains('arrived')) return;
+  drawGuideLine(currentPosition, destination);
+  const km = haversine(currentPosition, destination);
+  const txt = km < 1 ? `${Math.round(km * 1000)} m to destination` : `${km.toFixed(2)} km to destination`;
+  destInfo.textContent = '🏁 ' + txt;
+  destInfo.classList.remove('hidden');
+}
+
+function arriveAtDestination() {
+  removeGuideLine();
+  destInfo.textContent = '🎉 You’ve arrived at your destination!';
+  destInfo.classList.remove('hidden');
+  destInfo.classList.add('arrived');
+  if (recording) stopRecording(); // auto-stop & save the walk
+}
+
+function drawGuideLine(from, to) {
+  const id = 'guide-line';
+  const data = { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [from, to] } };
+  if (!recordMap || !recordMap.isStyleLoaded()) return;
+  if (recordMap.getSource(id)) { recordMap.getSource(id).setData(data); return; }
+  recordMap.addSource(id, { type: 'geojson', data });
+  recordMap.addLayer({
+    id, type: 'line', source: id,
+    layout: { 'line-cap': 'round' },
+    paint: { 'line-color': '#888', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.7 }
+  });
+}
+
+function removeGuideLine() {
+  if (!recordMap) return;
+  const id = 'guide-line';
+  if (recordMap.getLayer(id)) recordMap.removeLayer(id);
+  if (recordMap.getSource(id)) recordMap.removeSource(id);
 }
 
 function onError(err) { console.warn('GPS:', err.message); }
@@ -446,6 +556,7 @@ function locateUser() {
       updateUserLocation(recordMap, coords);
       recordMap.flyTo({ center: coords, zoom: 16, duration: 1000 });
       reverseGeocode(coords);
+      updateDestination();
       locateBtn.textContent = '◎ Locate Me';
     },
     (err) => {
@@ -656,7 +767,35 @@ searchInput.addEventListener('input', () => {
 });
 document.addEventListener('click', e => {
   if (!e.target.closest('#explore-controls')) autoResults.classList.add('hidden');
+  if (!e.target.closest('#dest-row')) destResults.classList.add('hidden');
 });
+
+/* ---- DESTINATION SEARCH (Record tab) ---- */
+
+let destTimeout = null;
+destInput.addEventListener('input', () => {
+  clearTimeout(destTimeout);
+  const q = destInput.value.trim();
+  if (q.length < 2) { destResults.classList.add('hidden'); return; }
+  destTimeout = setTimeout(async () => {
+    const results = await forwardGeocode(q);
+    if (!results.length) { destResults.classList.add('hidden'); return; }
+    destResults.innerHTML = results.map(r => `
+      <div class="autocomplete-item" data-lng="${r.center[0]}" data-lat="${r.center[1]}" data-name="${escHtml(r.place_name)}">
+        ${escHtml(r.place_name)}
+      </div>
+    `).join('');
+    destResults.classList.remove('hidden');
+    destResults.querySelectorAll('.autocomplete-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const lng = +el.dataset.lng, lat = +el.dataset.lat;
+        destResults.classList.add('hidden');
+        setDestination([lng, lat], el.dataset.name);
+      });
+    });
+  }, 250);
+});
+destClear.addEventListener('click', clearDestination);
 
 function placePin(coords, name) {
   if (searchMarker) searchMarker.remove();
