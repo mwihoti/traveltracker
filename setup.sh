@@ -11,5 +11,6 @@ if [ -z "${MAPTILER_API_KEY}" ]; then
 fi
 cat > config.js <<EOF
 window.API_KEY = '${MAPTILER_API_KEY}';
+window.TOMTOM_KEY = '${TOMTOM_API_KEY:-}';
 EOF
 echo "Generated config.js"

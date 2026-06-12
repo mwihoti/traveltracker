@@ -46,8 +46,9 @@ main{flex:1;position:relative;overflow:hidden}
 #record-btn.recording::after{content:'';position:absolute;inset:14px;border-radius:4px;background:#ff4444}
 #record-btn:active{transform:scale(.95)}
 #locate-row{display:flex;align-items:center;gap:16px;width:100%;justify-content:center}
-#locate-btn{padding:8px 18px;border-radius:20px;border:1px solid var(--primary);background:transparent;color:var(--primary);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+#locate-btn,#live-btn{padding:8px 18px;border-radius:20px;border:1px solid var(--primary);background:transparent;color:var(--primary);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
 #locate-btn:active{background:var(--primary);color:#fff}
+#live-btn.on{background:var(--primary);color:#fff}
 #live-stats{display:flex;gap:20px;width:100%;justify-content:center}
 #live-stats span{font-size:13px;color:var(--text2);text-align:center}
 #live-stats span strong{display:block;font-size:18px;color:var(--text);font-weight:700;margin-top:2px}
@@ -112,6 +113,14 @@ main{flex:1;position:relative;overflow:hidden}
 #layer-toggles label{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text);cursor:pointer}
 #layer-toggles input[type="checkbox"]{accent-color:var(--primary)}
 #style-selector{background:var(--surface2);color:var(--text);border:1px solid #444;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;margin-left:auto}
+#hotspots-btn{background:var(--surface2);color:var(--text);border:1px solid #444;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+#hotspot-results{background:var(--surface);border-radius:var(--radius);overflow-y:auto;max-height:38vh;box-shadow:var(--shadow)}
+#hotspot-results.hidden{display:none}
+.hot-item{padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.hot-item:last-child{border-bottom:none}
+.hot-item:hover,.hot-item:active{background:var(--surface2)}
+.hot-item .hot-type{color:var(--text2);font-size:11px;white-space:nowrap}
+.hot-marker{font-size:22px;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.5);cursor:pointer}
 
 /* TAB BAR */
 #tab-bar{display:flex;background:var(--surface);border-top:1px solid #333;flex-shrink:0;z-index:10}
@@ -156,6 +165,7 @@ main{flex:1;position:relative;overflow:hidden}
       <div id="locate-row">
         <button id="locate-btn" aria-label="Show my location">◎ Locate Me</button>
         <button id="record-btn" aria-label="Start/Stop Walk">Start</button>
+        <button id="live-btn" aria-label="Toggle live navigation view">🧭 Live</button>
       </div>
     </div>
   </section>
@@ -180,12 +190,16 @@ main{flex:1;position:relative;overflow:hidden}
       <div id="layer-toggles">
         <label><input type="checkbox" id="toggle-buildings" checked> Buildings</label>
         <label><input type="checkbox" id="toggle-weather"> Weather</label>
+        <label><input type="checkbox" id="toggle-traffic"> Traffic</label>
+        <label><input type="checkbox" id="toggle-3d"> 3D</label>
+        <button id="hotspots-btn">🔥 Hot Spots</button>
         <select id="style-selector">
           <option value="outdoor-v2">Outdoor</option>
           <option value="streets-v2">Streets</option>
           <option value="satellite-v2">Satellite</option>
         </select>
       </div>
+      <div id="hotspot-results" class="hidden"></div>
     </div>
   </section>
 </main>
@@ -227,6 +241,9 @@ let userMarker = null;
 let searchMarker = null;
 let destination = null;
 let destMarker = null;
+let liveView = false;
+let lastLiveCoord = null;
+let hotspotMarkers = [];
 
 const $ = id => document.getElementById(id);
 const streetName = $('street-name');
@@ -249,6 +266,11 @@ const destResults = $('dest-results');
 const destInfo = $('dest-info');
 const chkBuildings = $('toggle-buildings');
 const chkWeather = $('toggle-weather');
+const chkTraffic = $('toggle-traffic');
+const chk3d = $('toggle-3d');
+const hotspotsBtn = $('hotspots-btn');
+const hotspotResults = $('hotspot-results');
+const liveBtn = $('live-btn');
 const styleSel = $('style-selector');
 const tabBtns = document.querySelectorAll('[data-tab]');
 
@@ -408,6 +430,134 @@ function removeWeatherLayers(map) {
   ['weather-precip','weather-clouds'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
 }
 
+/* ---- IMMERSIVE 3D VIEW ---- */
+
+function add3dBuildings(map) {
+  if (map.getLayer('buildings-3d')) return;
+  if (!map.getSource('buildings')) addBuildingsLayers(map);
+  map.addLayer({
+    id: 'buildings-3d', type: 'fill-extrusion', source: 'buildings', 'source-layer': 'building',
+    paint: {
+      'fill-extrusion-color': '#8aa2c0',
+      'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8],
+      'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+      'fill-extrusion-opacity': 0.75
+    }
+  });
+}
+
+function remove3dBuildings(map) {
+  if (map.getLayer('buildings-3d')) map.removeLayer('buildings-3d');
+}
+
+function enable3d(map) {
+  add3dBuildings(map);
+  try { map.enableTerrain(1.2); } catch (e) { console.warn('Terrain unavailable:', e); }
+  map.easeTo({ pitch: 60, duration: 900 });
+}
+
+function disable3d(map) {
+  remove3dBuildings(map);
+  try { map.disableTerrain(); } catch {}
+  map.easeTo({ pitch: 0, bearing: 0, duration: 700 });
+}
+
+/* ---- TRAFFIC (TomTom flow tiles — MapTiler has no traffic data) ---- */
+
+function addTrafficLayers(map) {
+  if (!window.TOMTOM_KEY) {
+    chkTraffic.checked = false;
+    alert('Traffic needs a free TomTom API key.\n\nGet one at developer.tomtom.com, add TOMTOM_API_KEY=... to your .env (and Vercel env vars), then redeploy.');
+    return;
+  }
+  if (map.getSource('traffic')) return;
+  map.addSource('traffic', {
+    type: 'raster',
+    tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${window.TOMTOM_KEY}`],
+    tileSize: 256
+  });
+  map.addLayer({
+    id: 'traffic-layer', type: 'raster', source: 'traffic',
+    paint: { 'raster-opacity': 0.7 }
+  }, getLabelLayerId(map));
+}
+
+function removeTrafficLayers(map) {
+  if (map.getLayer('traffic-layer')) map.removeLayer('traffic-layer');
+  if (map.getSource('traffic')) map.removeSource('traffic');
+}
+
+/* ---- HOT SPOTS (nearby POIs via OpenStreetMap Overpass) ---- */
+
+const HOT_ICONS = { attraction: '⭐', museum: '🏛', viewpoint: '🌄', gallery: '🖼', zoo: '🦁',
+  cafe: '☕', restaurant: '🍽', bar: '🍻', pub: '🍻', fast_food: '🍔', park: '🌳' };
+
+async function findHotspots() {
+  const c = exploreMap.getCenter();
+  hotspotsBtn.textContent = '🔥 Searching…';
+  const q = `[out:json][timeout:12];(
+    node(around:1500,${c.lat},${c.lng})[tourism~"attraction|museum|viewpoint|gallery|zoo"][name];
+    node(around:1500,${c.lat},${c.lng})[amenity~"cafe|restaurant|bar|pub|fast_food"][name];
+    node(around:1500,${c.lat},${c.lng})[leisure=park][name];
+  );out body 60;`;
+  try {
+    const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: 'data=' + encodeURIComponent(q) });
+    const d = await r.json();
+    const spots = (d.elements || [])
+      .map(e => ({
+        name: e.tags.name,
+        type: e.tags.tourism || e.tags.amenity || e.tags.leisure,
+        coords: [e.lon, e.lat],
+        // places notable enough for a Wikipedia entry rank first
+        score: (e.tags.wikipedia || e.tags.wikidata ? 2 : 0) + (e.tags.tourism ? 1 : 0)
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12);
+    renderHotspots(spots);
+  } catch (e) {
+    console.warn('Overpass:', e);
+    hotspotResults.innerHTML = '<div class="hot-item">Could not load nearby places — try again shortly.</div>';
+    hotspotResults.classList.remove('hidden');
+  }
+  hotspotsBtn.textContent = '🔥 Hot Spots';
+}
+
+function renderHotspots(spots) {
+  clearHotspots();
+  if (!spots.length) {
+    hotspotResults.innerHTML = '<div class="hot-item">No notable places found nearby. Pan the map and try again.</div>';
+    hotspotResults.classList.remove('hidden');
+    return;
+  }
+  hotspotResults.innerHTML = spots.map((s, i) => `
+    <div class="hot-item" data-i="${i}">
+      <span>${HOT_ICONS[s.type] || '📍'} ${escHtml(s.name)}</span>
+      <span class="hot-type">${escHtml(s.type.replace('_', ' '))}</span>
+    </div>`).join('');
+  hotspotResults.classList.remove('hidden');
+  spots.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'hot-marker';
+    el.textContent = HOT_ICONS[s.type] || '📍';
+    hotspotMarkers.push(new maptilersdk.Marker({ element: el })
+      .setLngLat(s.coords)
+      .setPopup(new maptilersdk.Popup().setText(s.name))
+      .addTo(exploreMap));
+  });
+  hotspotResults.querySelectorAll('.hot-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const s = spots[+el.dataset.i];
+      exploreMap.flyTo({ center: s.coords, zoom: 17 });
+      hotspotResults.classList.add('hidden');
+    });
+  });
+}
+
+function clearHotspots() {
+  hotspotMarkers.forEach(m => m.remove());
+  hotspotMarkers = [];
+}
+
 /* ---- GPS TRACKING ---- */
 
 function startRecording() {
@@ -459,7 +609,7 @@ function onPosition(pos) {
     routeCoords.push(coords);
     routeTimes.push(Date.now());
     addRouteLine(recordMap, routeCoords);
-    recordMap.flyTo({ center: coords, zoom: 16, duration: 800 });
+    moveCamera(coords);
     const dist = calcDistance(routeCoords);
     const dur = (Date.now() - startTime) / 1000;
     currentSession.distance = dist;
@@ -554,6 +704,43 @@ function removeGuideLine() {
 }
 
 function onError(err) { console.warn('GPS:', err.message); }
+
+/* ---- LIVE NAVIGATION VIEW ---- */
+
+// In live view the camera tracks you like a turn-by-turn navigator:
+// tilted, zoomed in, rotated to your direction of travel.
+function moveCamera(coords) {
+  if (liveView) {
+    const bearing = lastLiveCoord && haversine(lastLiveCoord, coords) > 0.003
+      ? calcBearing(lastLiveCoord, coords)
+      : recordMap.getBearing();
+    recordMap.easeTo({ center: coords, zoom: 17, pitch: 60, bearing, duration: 900 });
+  } else {
+    recordMap.flyTo({ center: coords, zoom: 16, duration: 800 });
+  }
+  lastLiveCoord = coords;
+}
+
+function toggleLiveView() {
+  liveView = !liveView;
+  liveBtn.classList.toggle('on', liveView);
+  if (liveView) {
+    add3dBuildings(recordMap);
+    const target = currentPosition || recordMap.getCenter();
+    recordMap.easeTo({ center: target, zoom: 17, pitch: 60, duration: 900 });
+  } else {
+    remove3dBuildings(recordMap);
+    recordMap.easeTo({ pitch: 0, bearing: 0, duration: 700 });
+  }
+}
+
+function calcBearing(a, b) {
+  const [l1, p1] = a.map(c => c * Math.PI / 180);
+  const [l2, p2] = b.map(c => c * Math.PI / 180);
+  const y = Math.sin(l2 - l1) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(l2 - l1);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
 
 function locateUser() {
   if (!navigator.geolocation) { alert('Geolocation not available'); return; }
@@ -811,7 +998,10 @@ searchInput.addEventListener('input', () => {
   }, 250);
 });
 document.addEventListener('click', e => {
-  if (!e.target.closest('#explore-controls')) autoResults.classList.add('hidden');
+  if (!e.target.closest('#explore-controls')) {
+    autoResults.classList.add('hidden');
+    hotspotResults.classList.add('hidden');
+  }
   if (!e.target.closest('#dest-row')) destResults.classList.add('hidden');
 });
 
@@ -864,12 +1054,24 @@ chkWeather.addEventListener('change', () => {
   chkWeather.checked ? addWeatherLayers(exploreMap) : removeWeatherLayers(exploreMap);
 });
 
+chkTraffic.addEventListener('change', () => {
+  chkTraffic.checked ? addTrafficLayers(exploreMap) : removeTrafficLayers(exploreMap);
+});
+
+chk3d.addEventListener('change', () => {
+  chk3d.checked ? enable3d(exploreMap) : disable3d(exploreMap);
+});
+
+hotspotsBtn.addEventListener('click', findHotspots);
+
 styleSel.addEventListener('change', () => {
   const m = { 'outdoor-v2': maptilersdk.MapStyle.OUTDOOR, 'streets-v2': maptilersdk.MapStyle.STREETS, 'satellite-v2': maptilersdk.MapStyle.SATELLITE };
   exploreMap.setStyle(m[styleSel.value] || styleSel.value);
   exploreMap.once('style.load', () => {
     if (chkBuildings.checked) addBuildingsLayers(exploreMap);
     if (chkWeather.checked) addWeatherLayers(exploreMap);
+    if (chkTraffic.checked) addTrafficLayers(exploreMap);
+    if (chk3d.checked) enable3d(exploreMap);
   });
 });
 
@@ -903,6 +1105,7 @@ recordBtn.addEventListener('click', () => {
 });
 
 locateBtn.addEventListener('click', locateUser);
+liveBtn.addEventListener('click', toggleLiveView);
 
 /* ---- UTILITIES ---- */
 
