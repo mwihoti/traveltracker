@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="config.js"></script>
 <script src="https://cdn.maptiler.com/maptiler-sdk-js/v2.5.0/maptiler-sdk.umd.min.js"></script>
 <link href="https://cdn.maptiler.com/maptiler-sdk-js/v2.5.0/maptiler-sdk.css" rel="stylesheet">
@@ -26,6 +27,7 @@ header h1{font-size:18px;font-weight:700;color:#fff;letter-spacing:-.3px}
 /* RECORD INDICATOR */
 #record-indicator{display:flex;align-items:center;gap:6px;font-size:12px;color:#ff4444;font-weight:600}
 #record-indicator.hidden{display:none}
+#install-btn{padding:6px 12px;border-radius:16px;border:1px solid var(--primary);background:transparent;color:var(--primary);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .pulse-dot{width:10px;height:10px;border-radius:50%;background:#ff4444;animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
 
@@ -154,6 +156,7 @@ main{flex:1;position:relative;overflow:hidden}
     <span>REC</span>
   </div>
   <div id="street-name"></div>
+  <button id="install-btn" class="hidden" aria-label="Install app">📲 Install</button>
 </header>
 
 <main>
@@ -584,6 +587,24 @@ function registerSW() {
   if ('serviceWorker' in navigator)
     navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+/* ---- PWA INSTALL PROMPT ---- */
+
+let installPrompt = null;
+const installBtn = $('install-btn');
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  installPrompt = e;
+  installBtn.classList.remove('hidden');
+});
+installBtn.addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  installBtn.classList.add('hidden');
+});
+window.addEventListener('appinstalled', () => installBtn.classList.add('hidden'));
 
 /* ---- MAP HELPERS ---- */
 

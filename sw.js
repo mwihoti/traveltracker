@@ -1,4 +1,4 @@
-const CACHE_NAME = 'walktracker-v2';
+const CACHE_NAME = 'walktracker-v3';
 const SHELL_URLS = [
   '/',
   '/index.html',
