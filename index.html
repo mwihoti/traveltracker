@@ -129,6 +129,15 @@ main{flex:1;position:relative;overflow:hidden}
 #tab-bar button.active{color:var(--primary)}
 #tab-bar button.active::after{content:'';position:absolute;top:0;left:20%;right:20%;height:2px;background:var(--primary);border-radius:0 0 2px 2px}
 
+/* PLACE DETAILS CARD */
+#place-card{position:absolute;left:12px;right:12px;bottom:12px;background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px;z-index:15}
+#place-card h4{font-size:15px;color:#fff;margin-bottom:4px;padding-right:24px}
+#place-card p{font-size:12px;color:var(--text2);margin-bottom:8px}
+#place-card .pc-actions{display:flex;gap:8px}
+#place-card .pc-actions button{flex:1;padding:9px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--primary);color:#fff}
+#pc-close{position:absolute;top:8px;right:10px;background:transparent;border:none;color:var(--text2);font-size:18px;cursor:pointer;padding:2px 6px}
+#dest-info{cursor:pointer}
+
 /* MISC */
 .hidden{display:none!important}
 .btn-primary{background:var(--primary);color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
@@ -204,6 +213,16 @@ main{flex:1;position:relative;overflow:hidden}
       <div id="hotspot-results" class="hidden"></div>
     </div>
   </section>
+  <!-- PLACE DETAILS CARD (shown on map tap) -->
+  <div id="place-card" class="hidden">
+    <button id="pc-close" aria-label="Close">&times;</button>
+    <h4 id="pc-title"></h4>
+    <p id="pc-address"></p>
+    <p id="pc-meta"></p>
+    <div class="pc-actions">
+      <button id="pc-setdest">🏁 Set as Destination</button>
+    </div>
+  </div>
 </main>
 
 <nav id="tab-bar">
@@ -280,6 +299,10 @@ const hotspotResults = $('hotspot-results');
 const liveBtn = $('live-btn');
 const shareBtn = $('share-btn-live');
 const styleSel = $('style-selector');
+const placeCard = $('place-card');
+const pcTitle = $('pc-title');
+const pcAddress = $('pc-address');
+const pcMeta = $('pc-meta');
 const tabBtns = document.querySelectorAll('[data-tab]');
 
 async function init() {
@@ -295,9 +318,52 @@ async function init() {
   loadHistory();
   setupTabs();
   registerSW();
+  setupMapClicks();
   if (!initWatchMode()) {
     smartLocate();
     restoreDestination();
+  }
+}
+
+/* ---- PLACE DETAILS ON MAP TAP ---- */
+
+let placeCardCoords = null;
+let placeCardName = '';
+
+function setupMapClicks() {
+  recordMap.on('click', e => showPlaceCard([e.lngLat.lng, e.lngLat.lat]));
+  exploreMap.on('click', e => showPlaceCard([e.lngLat.lng, e.lngLat.lat]));
+}
+
+async function showPlaceCard(coords) {
+  placeCardCoords = coords;
+  placeCardName = 'Dropped pin';
+  pcTitle.textContent = 'Looking up place…';
+  pcAddress.textContent = '';
+  const bits = [`${coords[1].toFixed(5)}, ${coords[0].toFixed(5)}`];
+  if (currentPosition) {
+    const km = haversine(currentPosition, coords);
+    bits.push(km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(2)} km away`);
+  }
+  pcMeta.textContent = bits.join(' · ');
+  placeCard.classList.remove('hidden');
+  fetchElevation(coords[1], coords[0]).then(e => {
+    if (e != null) { bits.push(`⛰ ${e.toFixed(0)} m elevation`); pcMeta.textContent = bits.join(' · '); }
+  });
+  try {
+    const r = await fetch(`https://api.maptiler.com/geocoding/${coords[0]},${coords[1]}.json?key=${API_KEY}&language=en&limit=3`);
+    const d = await r.json();
+    const f = d.features?.[0];
+    if (f) {
+      placeCardName = f.place_name.split(',')[0];
+      pcTitle.textContent = '📍 ' + placeCardName;
+      pcAddress.textContent = f.place_name;
+    } else {
+      pcTitle.textContent = '📍 Dropped pin';
+      pcAddress.textContent = 'No address data for this spot';
+    }
+  } catch {
+    pcTitle.textContent = '📍 Dropped pin';
   }
 }
 
@@ -919,14 +985,20 @@ function onError(err) { console.warn('GPS:', err.message); }
 
 /* ---- LIVE NAVIGATION VIEW ---- */
 
-// In live view the camera tracks you like a turn-by-turn navigator:
-// tilted, zoomed in, rotated to your direction of travel.
+// Camera while recording: live view follows you tilted like a navigator;
+// with a destination set it frames both you and the flag so the path
+// ahead stays visible; otherwise it just follows you.
 function moveCamera(coords) {
   if (liveView) {
     const bearing = lastLiveCoord && haversine(lastLiveCoord, coords) > 0.003
       ? calcBearing(lastLiveCoord, coords)
       : recordMap.getBearing();
     recordMap.easeTo({ center: coords, zoom: 17, pitch: 60, bearing, duration: 900 });
+  } else if (destination && !destInfo.classList.contains('arrived')) {
+    try {
+      const b = new maptilersdk.LngLatBounds(coords, coords).extend(destination);
+      recordMap.fitBounds(b, { padding: 70, maxZoom: 16, duration: 800 });
+    } catch { recordMap.flyTo({ center: coords, zoom: 16, duration: 800 }); }
   } else {
     recordMap.flyTo({ center: coords, zoom: 16, duration: 800 });
   }
@@ -1346,6 +1418,16 @@ recordBtn.addEventListener('click', () => {
 locateBtn.addEventListener('click', locateUser);
 liveBtn.addEventListener('click', toggleLiveView);
 shareBtn.addEventListener('click', toggleShare);
+$('pc-close').addEventListener('click', () => placeCard.classList.add('hidden'));
+$('pc-setdest').addEventListener('click', () => {
+  if (!placeCardCoords) return;
+  setDestination(placeCardCoords, placeCardName);
+  destInput.value = placeCardName;
+  placeCard.classList.add('hidden');
+  switchTab('record');
+});
+// Tap the 🏁 bar to see the whole path from you to the destination
+destInfo.addEventListener('click', () => { if (destination) fitToDestination(); });
 
 /* ---- UTILITIES ---- */
 

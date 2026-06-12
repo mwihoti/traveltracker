@@ -1,4 +1,4 @@
-const CACHE_NAME = 'walktracker-v1';
+const CACHE_NAME = 'walktracker-v2';
 const SHELL_URLS = [
   '/',
   '/index.html',
@@ -25,9 +25,14 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
+
+  // Live data must never be cached
+  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+
   const isMapTiler = url.hostname.includes('maptiler');
   const isTile = url.pathname.includes('/tiles/');
 
+  // Map tiles: cache-first (they never change, and offline matters)
   if (isMapTiler && isTile) {
     e.respondWith(
       caches.match(e.request).then(cached =>
@@ -41,26 +46,15 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  if (isMapTiler) {
-    e.respondWith(
-      fetch(e.request).then(resp => {
-        const cloned = resp.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(e.request, cloned));
-        return resp;
-      }).catch(() => caches.match(e.request).then(cached =>
-        cached || new Response('', { status: 503 })
-      ))
-    );
-    return;
-  }
-
+  // Everything else: network-first so deploys reach users immediately,
+  // falling back to cache when offline
   e.respondWith(
-    caches.match(e.request).then(cached =>
-      cached || fetch(e.request).then(resp => {
-        const cloned = resp.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(e.request, cloned));
-        return resp;
-      })
-    )
+    fetch(e.request).then(resp => {
+      const cloned = resp.clone();
+      caches.open(CACHE_NAME).then(cache => cache.put(e.request, cloned));
+      return resp;
+    }).catch(() => caches.match(e.request).then(cached =>
+      cached || new Response('', { status: 503 })
+    ))
   );
 });
