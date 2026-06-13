@@ -277,6 +277,11 @@ let wakeLock = null;
 
 const GEO_OPTS = { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 };
 
+// Render the map canvas at >=2x and let the browser downscale (supersampling).
+// On low-DPI displays (most desktops, Windows at 125/150%) this sharpens road
+// lines and labels that otherwise look soft/low-res; on retina it's a no-op.
+const HIDPI = Math.max(window.devicePixelRatio || 1, 2);
+
 const $ = id => document.getElementById(id);
 const streetName = $('street-name');
 const recordBtn = $('record-btn');
@@ -652,6 +657,7 @@ function initRecordMap() {
     style: maptilersdk.MapStyle.OUTDOOR,
     center: [-73.985, 40.748],
     zoom: 15,
+    pixelRatio: HIDPI,
     attributionControl: false
   });
   recordMap.addControl(new maptilersdk.AttributionControl(), 'bottom-right');
@@ -664,6 +670,7 @@ function initExploreMap() {
     style: maptilersdk.MapStyle.OUTDOOR,
     center: [-73.985, 40.748],
     zoom: 12,
+    pixelRatio: HIDPI,
     attributionControl: false
   });
   exploreMap.addControl(new maptilersdk.NavigationControl(), 'top-right');
@@ -681,6 +688,7 @@ function initReplayMap(center) {
     style: maptilersdk.MapStyle.OUTDOOR,
     center: center || [-73.985, 40.748],
     zoom: 14,
+    pixelRatio: HIDPI,
     attributionControl: false
   });
   replayMap.addControl(new maptilersdk.AttributionControl(), 'bottom-right');
