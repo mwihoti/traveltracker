@@ -727,7 +727,7 @@ function addWeatherLayers(map) {
   if (map.getSource('weather-precip')) return;
   map.addSource('weather-precip', {
     type: 'raster',
-    tiles: [`https://api.maptiler.com/weather/precipitation/{z}/{x}/{y}.png?key=${API_KEY}`],
+    tiles: [`https://api.maptiler.com/weather/precipitation/{z}/{x}/{y}@2x.png?key=${API_KEY}`],
     tileSize: 256
   });
   map.addLayer({
@@ -736,7 +736,7 @@ function addWeatherLayers(map) {
   });
   map.addSource('weather-clouds', {
     type: 'raster',
-    tiles: [`https://api.maptiler.com/weather/clouds/{z}/{x}/{y}.png?key=${API_KEY}`],
+    tiles: [`https://api.maptiler.com/weather/clouds/{z}/{x}/{y}@2x.png?key=${API_KEY}`],
     tileSize: 256
   });
   map.addLayer({
@@ -793,7 +793,7 @@ function addTrafficLayers(map) {
   if (map.getSource('traffic')) return;
   map.addSource('traffic', {
     type: 'raster',
-    tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${window.TOMTOM_KEY}`],
+    tiles: [`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${window.TOMTOM_KEY}&tileSize=512`],
     tileSize: 256
   });
   map.addLayer({
